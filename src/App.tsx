@@ -1,7 +1,9 @@
 import { AlertCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { AudioRecorder } from "./components/AudioRecorder";
+import { StreamRecorder } from "./components/StreamRecorder";
 import { TranscriptionDisplay } from "./components/TranscriptionDisplay";
+import { Separator } from "./components/ui/separator";
 
 type Transcription = {
   id: string;
@@ -63,8 +65,15 @@ function App() {
                 onTranscription={handleTranscription}
               />
 
+              <Separator className="my-3" />
+
+              <StreamRecorder
+                onError={handleError}
+                onTranscription={handleTranscription}
+              />
+
               {/* Controls */}
-              <div className="mt-6 border-t pt-6">
+              <div className="mt-6">
                 <button
                   className="w-full rounded-md border border-gray-300 bg-gray-100 px-4 py-2 font-medium text-gray-700 text-sm transition-colors hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2"
                   disabled={transcriptions.length === 0}
