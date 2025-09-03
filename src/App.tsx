@@ -1,4 +1,4 @@
-import { AlertCircle, Mic } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 import { useCallback, useState } from "react";
 import { AudioRecorder } from "./components/AudioRecorder";
 import { TranscriptionDisplay } from "./components/TranscriptionDisplay";
