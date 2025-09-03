@@ -21,7 +21,7 @@ export function TranscriptionDisplay({
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [transcriptions.length]);
+  }, []);
 
   const getLanguageFlag = (language: string): string => {
     const languageFlags: Record<string, string> = {

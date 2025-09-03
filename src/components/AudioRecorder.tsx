@@ -1,4 +1,5 @@
 import { Loader2, Mic, MicOff } from "lucide-react";
+import OpenAI from "openai";
 import { useCallback, useRef, useState } from "react";
 import { Button } from "./ui/button";
 
@@ -15,36 +16,30 @@ export function AudioRecorder({
   const [isProcessing, setIsProcessing] = useState(false);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const openai = new OpenAI({
+    apiKey: import.meta.env.VITE_OPENAI_API_KEY,
+    dangerouslyAllowBrowser: true,
+  });
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: ""
   const transcribeAudio = useCallback(
     async (audioBlob: Blob) => {
       try {
-        const formData = new FormData();
-        formData.append("file", audioBlob, "audio.webm");
-        formData.append("model", "whisper-1");
-        formData.append("response_format", "verbose_json");
+        const audioFile = new File([audioBlob], "audio.webm", {
+          type: "audio/webm",
+        });
 
-        const response = await fetch(
-          "https://api.openai.com/v1/audio/transcriptions",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${import.meta.env.VITE_OPENAI_API_KEY}`,
-            },
-            body: formData,
-          }
-        );
+        const transcription = await openai.audio.transcriptions.create({
+          file: audioFile,
+          model: "whisper-1",
+          response_format: "verbose_json",
+        });
 
-        if (!response.ok) {
-          throw new Error(
-            `API request failed: ${response.status} ${response.statusText}`
+        if (transcription.text?.trim()) {
+          onTranscription(
+            transcription.text,
+            transcription.language || "unknown"
           );
-        }
-
-        const result = await response.json();
-
-        if (result.text?.trim()) {
-          onTranscription(result.text, result.language || "unknown");
         }
       } catch {
         onError("Failed to transcribe audio. Please try again.");
