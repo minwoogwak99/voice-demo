@@ -1,6 +1,5 @@
 import { useEffectAsync, useMemoAsync } from "@chengsokdara/react-hooks-async";
-import type { RawAxiosRequestHeaders } from "axios";
-import type { Harker } from "hark";
+import { useMicVAD } from "@ricky0123/vad-react";
 import OpenAI from "openai";
 import { useEffect, useRef, useState } from "react";
 import type { Options, RecordRTCPromisesHandler } from "recordrtc";
@@ -8,7 +7,6 @@ import {
 	defaultStopTimeout,
 	ffmpegCoreUrl,
 	silenceRemoveCommand,
-	whisperApiEndpoint,
 } from "./configs";
 import type {
 	UseWhisperConfig,
@@ -50,6 +48,146 @@ const defaultTranscript: UseWhisperTranscript = {
 };
 
 /**
+ * Helper function to merge WAV audio chunks properly
+ * Each chunk is a complete WAV file with headers, so we need to extract
+ * the raw audio data and create a new WAV file with proper headers
+ */
+const mergeWavChunks = async (chunks: Blob[]): Promise<Blob> => {
+	// If there's only one chunk, return it as is
+	if (chunks.length === 1) {
+		return chunks[0];
+	}
+
+	const audioBuffers: ArrayBuffer[] = [];
+	let sampleRate = 44100; // Default sample rate
+	let numChannels = 1; // Mono by default
+	let bitsPerSample = 16; // 16-bit audio by default
+
+	// Process each chunk to extract raw audio data
+	for (const chunk of chunks) {
+		const arrayBuffer = await chunk.arrayBuffer();
+		const dataView = new DataView(arrayBuffer);
+		
+		// Skip WAV header (44 bytes) and extract raw audio data
+		// WAV header structure:
+		// 0-3: "RIFF"
+		// 4-7: File size
+		// 8-11: "WAVE"
+		// 12-15: "fmt "
+		// 16-19: fmt chunk size
+		// 20-21: Audio format
+		// 22-23: Number of channels
+		// 24-27: Sample rate
+		// 28-31: Byte rate
+		// 32-33: Block align
+		// 34-35: Bits per sample
+		// 36-39: "data"
+		// 40-43: Data size
+		// 44+: Raw audio data
+		
+		// Extract audio format info from first chunk
+		if (audioBuffers.length === 0) {
+			numChannels = dataView.getUint16(22, true);
+			sampleRate = dataView.getUint32(24, true);
+			bitsPerSample = dataView.getUint16(34, true);
+		}
+		
+		// Find the "data" chunk (in case there are extra chunks like "LIST")
+		let dataOffset = 12; // Start after "RIFF" header
+		while (dataOffset < arrayBuffer.byteLength - 8) {
+			const chunkId = String.fromCharCode(
+				dataView.getUint8(dataOffset),
+				dataView.getUint8(dataOffset + 1),
+				dataView.getUint8(dataOffset + 2),
+				dataView.getUint8(dataOffset + 3)
+			);
+			const chunkSize = dataView.getUint32(dataOffset + 4, true);
+			
+			if (chunkId === 'data') {
+				// Found the data chunk, extract raw audio
+				const audioData = arrayBuffer.slice(dataOffset + 8, dataOffset + 8 + chunkSize);
+				audioBuffers.push(audioData);
+				break;
+			}
+			
+			// Move to next chunk
+			dataOffset += 8 + chunkSize;
+		}
+	}
+
+	// Combine all raw audio data
+	const totalLength = audioBuffers.reduce((sum, buffer) => sum + buffer.byteLength, 0);
+	const combinedAudio = new Uint8Array(totalLength);
+	let offset = 0;
+	for (const buffer of audioBuffers) {
+		combinedAudio.set(new Uint8Array(buffer), offset);
+		offset += buffer.byteLength;
+	}
+
+	// Create new WAV file with proper headers
+	const wavHeader = new ArrayBuffer(44);
+	const view = new DataView(wavHeader);
+	
+	// "RIFF" identifier
+	view.setUint8(0, 0x52); // R
+	view.setUint8(1, 0x49); // I
+	view.setUint8(2, 0x46); // F
+	view.setUint8(3, 0x46); // F
+	
+	// File size (excluding first 8 bytes)
+	view.setUint32(4, 36 + combinedAudio.length, true);
+	
+	// "WAVE" identifier
+	view.setUint8(8, 0x57);  // W
+	view.setUint8(9, 0x41);  // A
+	view.setUint8(10, 0x56); // V
+	view.setUint8(11, 0x45); // E
+	
+	// "fmt " sub-chunk
+	view.setUint8(12, 0x66); // f
+	view.setUint8(13, 0x6D); // m
+	view.setUint8(14, 0x74); // t
+	view.setUint8(15, 0x20); // space
+	
+	// fmt chunk size (16 for PCM)
+	view.setUint32(16, 16, true);
+	
+	// Audio format (1 = PCM)
+	view.setUint16(20, 1, true);
+	
+	// Number of channels
+	view.setUint16(22, numChannels, true);
+	
+	// Sample rate
+	view.setUint32(24, sampleRate, true);
+	
+	// Byte rate (sample rate * channels * bits per sample / 8)
+	view.setUint32(28, sampleRate * numChannels * bitsPerSample / 8, true);
+	
+	// Block align (channels * bits per sample / 8)
+	view.setUint16(32, numChannels * bitsPerSample / 8, true);
+	
+	// Bits per sample
+	view.setUint16(34, bitsPerSample, true);
+	
+	// "data" sub-chunk
+	view.setUint8(36, 0x64); // d
+	view.setUint8(37, 0x61); // a
+	view.setUint8(38, 0x74); // t
+	view.setUint8(39, 0x61); // a
+	
+	// Data size
+	view.setUint32(40, combinedAudio.length, true);
+	
+	// Combine header with audio data
+	const wavFile = new Uint8Array(44 + combinedAudio.length);
+	wavFile.set(new Uint8Array(wavHeader), 0);
+	wavFile.set(combinedAudio, 44);
+	
+	return new Blob([wavFile], { type: "audio/wav" });
+};
+
+/**
  * React Hook for OpenAI Whisper
  */
 export const useWhisper: UseWhisperHook = (config) => {
@@ -81,7 +219,6 @@ export const useWhisper: UseWhisperHook = (config) => {
 
 	const chunks = useRef<Blob[]>([]);
 
-	const listener = useRef<Harker | undefined>(undefined);
 	const recorder = useRef<RecordRTCPromisesHandler | undefined>(undefined);
 	const stream = useRef<MediaStream | undefined>(undefined);
 	const timeout = useRef<UseWhisperTimeout>(defaultTimeout);
@@ -97,13 +234,13 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 * - flush out and cleanup lamejs encoder instance
 	 * - destroy recordrtc instance and clear it from ref
 	 * - clear setTimout for onStopRecording
-	 * - clean up hark speaking detection listeners and clear it from ref
 	 * - stop all user's media steaming track and remove it from ref
 	 */
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: ""
 	useEffect(() => {
 		return () => {
+			vad.pause(); // Stop VAD on cleanup
 			if (chunks.current) {
 				chunks.current = [];
 			}
@@ -112,12 +249,6 @@ export const useWhisper: UseWhisperHook = (config) => {
 				recorder.current = undefined;
 			}
 			onStopTimeout("stop");
-			if (listener.current) {
-				// @ts-expect-error
-				listener.current.off("speaking", onStartSpeaking);
-				// @ts-expect-error
-				listener.current.off("stopped_speaking", onStopSpeaking);
-			}
 			if (stream.current) {
 				stream.current.getTracks().forEach((track) => {
 					track.stop();
@@ -133,6 +264,7 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 */
 	useEffectAsync(async () => {
 		if (autoStart) {
+			vad.start(); // Start VAD for speech detection
 			await onStartRecording();
 		}
 	}, [autoStart]);
@@ -141,6 +273,7 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 * start speech recording and start listen for speaking event
 	 */
 	const startRecording = async () => {
+		vad.start(); // Start VAD for speech detection
 		await onStartRecording();
 	};
 
@@ -148,6 +281,7 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 * pause speech recording also stop media stream
 	 */
 	const pauseRecording = async () => {
+		vad.pause(); // Pause VAD speech detection
 		await onPauseRecording();
 	};
 
@@ -155,6 +289,7 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 * stop speech recording and start the transcription
 	 */
 	const stopRecording = async () => {
+		vad.pause(); // Stop VAD speech detection
 		await onStopRecording();
 	};
 
@@ -213,7 +348,6 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 * get user media stream event
 	 * - try to stop all previous media streams
 	 * - ask user for media stream with a system popup
-	 * - register hark speaking detection listeners
 	 */
 	const onStartStreaming = async () => {
 		try {
@@ -225,15 +359,6 @@ export const useWhisper: UseWhisperHook = (config) => {
 			stream.current = await navigator.mediaDevices.getUserMedia({
 				audio: true,
 			});
-			if (!listener.current) {
-				const { default: hark } = await import("hark");
-				listener.current = hark(stream.current, {
-					interval: 100,
-					play: false,
-				});
-				listener.current.on("speaking", onStartSpeaking);
-				listener.current.on("stopped_speaking", onStopSpeaking);
-			}
 		} catch (err) {
 			console.error(err);
 		}
@@ -271,6 +396,15 @@ export const useWhisper: UseWhisperHook = (config) => {
 			onStartTimeout("stop");
 		}
 	};
+
+	/**
+	 * VAD (Voice Activity Detection) hook for speaking detection
+	 */
+	const vad = useMicVAD({
+		startOnLoad: false,
+		onSpeechStart: onStartSpeaking,
+		onSpeechEnd: onStopSpeaking,
+	});
 
 	/**
 	 * pause speech recording event
@@ -332,18 +466,10 @@ export const useWhisper: UseWhisperHook = (config) => {
 
 	/**
 	 * stop media stream event
-	 * - remove hark speaking detection listeners
 	 * - stop all media stream tracks
 	 * - clear media stream from ref
 	 */
 	const onStopStreaming = () => {
-		if (listener.current) {
-			// @ts-expect-error
-			listener.current.off("speaking", onStartSpeaking);
-			// @ts-expect-error
-			listener.current.off("stopped_speaking", onStopSpeaking);
-			listener.current = undefined;
-		}
 		if (stream.current) {
 			stream.current.getTracks().forEach((track) => {
 				track.stop();
@@ -459,13 +585,18 @@ export const useWhisper: UseWhisperHook = (config) => {
 		try {
 			if (streaming && recorder.current) {
 				onDataAvailableCallback?.(data);
+				console.log("chunk length before append", chunks.current.length);
 				chunks.current.push(data);
+				console.log("chunk length after append", chunks.current.length);
 				const recorderState = await recorder.current.getState();
 				if (recorderState === "recording") {
-					const blob = new Blob(chunks.current, { type: "audio/wav" });
-					const file = new File([blob], "speech.wav", { type: "audio/wav" });
+					// Properly merge WAV chunks
+					const blob = await mergeWavChunks(chunks.current);
+					const file = new File([blob], `speech.wav`, {
+						type: "audio/wav",
+					});
 					const text = await onWhispered(file);
-					console.log("onInterim", { text });
+					console.log("onInterims", { text });
 					if (text) {
 						setTranscript((prev) => ({ ...prev, text }));
 					}
