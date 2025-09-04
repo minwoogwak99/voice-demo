@@ -67,7 +67,7 @@ const mergeWavChunks = async (chunks: Blob[]): Promise<Blob> => {
 	for (const chunk of chunks) {
 		const arrayBuffer = await chunk.arrayBuffer();
 		const dataView = new DataView(arrayBuffer);
-		
+
 		// Skip WAV header (44 bytes) and extract raw audio data
 		// WAV header structure:
 		// 0-3: "RIFF"
@@ -84,14 +84,14 @@ const mergeWavChunks = async (chunks: Blob[]): Promise<Blob> => {
 		// 36-39: "data"
 		// 40-43: Data size
 		// 44+: Raw audio data
-		
+
 		// Extract audio format info from first chunk
 		if (audioBuffers.length === 0) {
 			numChannels = dataView.getUint16(22, true);
 			sampleRate = dataView.getUint32(24, true);
 			bitsPerSample = dataView.getUint16(34, true);
 		}
-		
+
 		// Find the "data" chunk (in case there are extra chunks like "LIST")
 		let dataOffset = 12; // Start after "RIFF" header
 		while (dataOffset < arrayBuffer.byteLength - 8) {
@@ -99,24 +99,30 @@ const mergeWavChunks = async (chunks: Blob[]): Promise<Blob> => {
 				dataView.getUint8(dataOffset),
 				dataView.getUint8(dataOffset + 1),
 				dataView.getUint8(dataOffset + 2),
-				dataView.getUint8(dataOffset + 3)
+				dataView.getUint8(dataOffset + 3),
 			);
 			const chunkSize = dataView.getUint32(dataOffset + 4, true);
-			
-			if (chunkId === 'data') {
+
+			if (chunkId === "data") {
 				// Found the data chunk, extract raw audio
-				const audioData = arrayBuffer.slice(dataOffset + 8, dataOffset + 8 + chunkSize);
+				const audioData = arrayBuffer.slice(
+					dataOffset + 8,
+					dataOffset + 8 + chunkSize,
+				);
 				audioBuffers.push(audioData);
 				break;
 			}
-			
+
 			// Move to next chunk
 			dataOffset += 8 + chunkSize;
 		}
 	}
 
 	// Combine all raw audio data
-	const totalLength = audioBuffers.reduce((sum, buffer) => sum + buffer.byteLength, 0);
+	const totalLength = audioBuffers.reduce(
+		(sum, buffer) => sum + buffer.byteLength,
+		0,
+	);
 	const combinedAudio = new Uint8Array(totalLength);
 	let offset = 0;
 	for (const buffer of audioBuffers) {
@@ -127,63 +133,63 @@ const mergeWavChunks = async (chunks: Blob[]): Promise<Blob> => {
 	// Create new WAV file with proper headers
 	const wavHeader = new ArrayBuffer(44);
 	const view = new DataView(wavHeader);
-	
+
 	// "RIFF" identifier
 	view.setUint8(0, 0x52); // R
 	view.setUint8(1, 0x49); // I
 	view.setUint8(2, 0x46); // F
 	view.setUint8(3, 0x46); // F
-	
+
 	// File size (excluding first 8 bytes)
 	view.setUint32(4, 36 + combinedAudio.length, true);
-	
+
 	// "WAVE" identifier
-	view.setUint8(8, 0x57);  // W
-	view.setUint8(9, 0x41);  // A
+	view.setUint8(8, 0x57); // W
+	view.setUint8(9, 0x41); // A
 	view.setUint8(10, 0x56); // V
 	view.setUint8(11, 0x45); // E
-	
+
 	// "fmt " sub-chunk
 	view.setUint8(12, 0x66); // f
-	view.setUint8(13, 0x6D); // m
+	view.setUint8(13, 0x6d); // m
 	view.setUint8(14, 0x74); // t
 	view.setUint8(15, 0x20); // space
-	
+
 	// fmt chunk size (16 for PCM)
 	view.setUint32(16, 16, true);
-	
+
 	// Audio format (1 = PCM)
 	view.setUint16(20, 1, true);
-	
+
 	// Number of channels
 	view.setUint16(22, numChannels, true);
-	
+
 	// Sample rate
 	view.setUint32(24, sampleRate, true);
-	
+
 	// Byte rate (sample rate * channels * bits per sample / 8)
-	view.setUint32(28, sampleRate * numChannels * bitsPerSample / 8, true);
-	
+	view.setUint32(28, (sampleRate * numChannels * bitsPerSample) / 8, true);
+
 	// Block align (channels * bits per sample / 8)
-	view.setUint16(32, numChannels * bitsPerSample / 8, true);
-	
+	view.setUint16(32, (numChannels * bitsPerSample) / 8, true);
+
 	// Bits per sample
 	view.setUint16(34, bitsPerSample, true);
-	
+
 	// "data" sub-chunk
 	view.setUint8(36, 0x64); // d
 	view.setUint8(37, 0x61); // a
 	view.setUint8(38, 0x74); // t
 	view.setUint8(39, 0x61); // a
-	
+
 	// Data size
 	view.setUint32(40, combinedAudio.length, true);
-	
+
 	// Combine header with audio data
 	const wavFile = new Uint8Array(44 + combinedAudio.length);
 	wavFile.set(new Uint8Array(wavHeader), 0);
 	wavFile.set(combinedAudio, 44);
-	
+
 	return new Blob([wavFile], { type: "audio/wav" });
 };
 
@@ -218,6 +224,9 @@ export const useWhisper: UseWhisperHook = (config) => {
 	});
 
 	const chunks = useRef<Blob[]>([]);
+	const speechChunks = useRef<Blob[]>([]);
+	const isSpeaking = useRef<boolean>(false);
+	const lastTranscriptionTime = useRef<number>(0);
 
 	const recorder = useRef<RecordRTCPromisesHandler | undefined>(undefined);
 	const stream = useRef<MediaStream | undefined>(undefined);
@@ -243,6 +252,9 @@ export const useWhisper: UseWhisperHook = (config) => {
 			vad.pause(); // Stop VAD on cleanup
 			if (chunks.current) {
 				chunks.current = [];
+			}
+			if (speechChunks.current) {
+				speechChunks.current = [];
 			}
 			if (recorder.current) {
 				recorder.current.destroy();
@@ -381,6 +393,7 @@ export const useWhisper: UseWhisperHook = (config) => {
 	const onStartSpeaking = () => {
 		console.log("start speaking");
 		setSpeaking(true);
+		isSpeaking.current = true;
 		onStopTimeout("stop");
 	};
 
@@ -389,9 +402,30 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 * - set speaking state to false
 	 * - start stop timeout back
 	 */
-	const onStopSpeaking = () => {
+	const onStopSpeaking = async () => {
 		console.log("stop speaking");
 		setSpeaking(false);
+		isSpeaking.current = false;
+		
+		// Process accumulated speech chunks when speech ends
+		if (speechChunks.current.length > 0 && streaming) {
+			try {
+				const blob = await mergeWavChunks(speechChunks.current);
+				const file = new File([blob], "speech.wav", {
+					type: "audio/wav",
+				});
+				const text = await onWhispered(file);
+				console.log("onSpeechEnd transcription", { text });
+				if (text) {
+					setTranscript((prev) => ({ ...prev, text }));
+				}
+				// Clear speech chunks after processing
+				speechChunks.current = [];
+			} catch (err) {
+				console.error("Error processing speech chunks:", err);
+			}
+		}
+		
 		if (nonStop) {
 			onStartTimeout("stop");
 		}
@@ -457,6 +491,7 @@ export const useWhisper: UseWhisperHook = (config) => {
 				}
 				await recorder.current.destroy();
 				chunks.current = [];
+				speechChunks.current = [];
 				recorder.current = undefined;
 			}
 		} catch (err) {
@@ -576,34 +611,56 @@ export const useWhisper: UseWhisperHook = (config) => {
 
 	/**
 	 * Get audio data in chunk based on timeSlice
-	 * - while recording send audio chunk to Whisper
-	 * - chunks are concatenated in succession
+	 * - while recording send audio chunk to Whisper only during speech
+	 * - chunks are concatenated in succession during speech
 	 * - set transcript text with interim result
 	 */
 	const onDataAvailable = async (data: Blob) => {
-		console.log("onDataAvailable", data);
+		console.log("onDataAvailable", { 
+			dataSize: data.size, 
+			isSpeaking: isSpeaking.current,
+			speechChunksLength: speechChunks.current.length 
+		});
+		
 		try {
 			if (streaming && recorder.current) {
 				onDataAvailableCallback?.(data);
-				console.log("chunk length before append", chunks.current.length);
+				
+				// Always keep all chunks for final processing
 				chunks.current.push(data);
-				console.log("chunk length after append", chunks.current.length);
-				const recorderState = await recorder.current.getState();
-				if (recorderState === "recording") {
-					// Properly merge WAV chunks
-					const blob = await mergeWavChunks(chunks.current);
-					const file = new File([blob], `speech.wav`, {
-						type: "audio/wav",
-					});
-					const text = await onWhispered(file);
-					console.log("onInterims", { text });
-					if (text) {
-						setTranscript((prev) => ({ ...prev, text }));
+				
+				// Only collect chunks for transcription when speaking
+				if (isSpeaking.current) {
+					console.log("Speech detected, adding chunk to speechChunks");
+					speechChunks.current.push(data);
+					
+					// Optional: Transcribe in real-time during speech
+					// You can control this frequency with lastTranscriptionTime
+					const now = Date.now();
+					const timeSinceLastTranscription = now - lastTranscriptionTime.current;
+					
+					// Transcribe every 2 seconds during continuous speech
+					if (timeSinceLastTranscription > 2000 && speechChunks.current.length > 0) {
+						const recorderState = await recorder.current.getState();
+						if (recorderState === "recording") {
+							const blob = await mergeWavChunks(speechChunks.current);
+							const file = new File([blob], "speech.wav", {
+								type: "audio/wav",
+							});
+							const text = await onWhispered(file);
+							console.log("onInterimTranscription", { text });
+							if (text) {
+								setTranscript((prev) => ({ ...prev, text }));
+							}
+							lastTranscriptionTime.current = now;
+						}
 					}
+				} else {
+					console.log("No speech detected, skipping chunk for transcription");
 				}
 			}
 		} catch (err) {
-			console.error(err);
+			console.error("Error in onDataAvailable:", err);
 		}
 	};
 
