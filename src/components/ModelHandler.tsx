@@ -18,9 +18,11 @@ const ModelHandler = () => {
 	});
 	return (
 		<div>
-			<p>Recording: {recording}</p>
-			<p>Speaking: {speaking}</p>
-			<p>Transcripting: {transcribing}</p>
+			<p>Recording: {recording ? "recording" : "not recording"}</p>
+			<p>Speaking: {speaking ? "speaking" : "not speaking"}</p>
+			<p>
+				Transcripting: {transcribing ? "transcribing" : "not transcribging"}
+			</p>
 			<p>Transcribed Text: {transcript.text}</p>
 			<Button onClick={() => startRecording()}>Start</Button>
 			<Button onClick={() => pauseRecording()}>Pause</Button>
