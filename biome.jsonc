@@ -1,7 +1,11 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.2.2/schema.json",
-  "extends": ["ultracite"],
-  "rules": {
-    "console": "off"
+  // "extends": ["ultracite"],
+  "linter": {
+    "rules": {
+      "suspicious": {
+        "noConsole": "off"
+      }
+    }
   }
 }
