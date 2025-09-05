@@ -397,9 +397,9 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 * - clear stop timeout
 	 */
 	const onStartSpeaking = () => {
-		console.log("start speaking", { 
+		console.log("start speaking", {
 			currentBase: currentUtteranceBase.current,
-			transcriptText: transcript.text 
+			transcriptText: transcript.text,
 		});
 		setSpeaking(true);
 		isSpeaking.current = true;
@@ -421,40 +421,44 @@ export const useWhisper: UseWhisperHook = (config) => {
 	const onStopSpeaking = async () => {
 		console.log("stop speaking");
 		setSpeaking(false);
-		isSpeaking.current = false;
 		
-		// Process accumulated speech chunks when speech ends - this represents one complete utterance
-		if (speechChunks.current.length > 0 && streaming) {
-			try {
-				const blob = await mergeWavChunks(speechChunks.current);
-				const file = new File([blob], "speech.wav", {
-					type: "audio/wav",
-				});
-				const text = await onWhispered(file);
-				console.log("Final utterance transcription", { 
-					text,
-					chunksProcessed: speechChunks.current.length 
-				});
-				if (text && text.trim()) {
-					// Replace interim with final transcription for this utterance
-					const finalTranscript = currentUtteranceBase.current ? 
-						`${currentUtteranceBase.current} ${text}` : text;
-					
-					setTranscript((prev) => ({
-						...prev,
-						text: finalTranscript
-					}));
-					
-					// Update the base for next utterance to include this final transcript
-					currentUtteranceBase.current = finalTranscript;
-				}
-				// Clear speech chunks after processing this utterance
-				speechChunks.current = [];
-			} catch (err) {
-				console.error("Error processing speech chunks:", err);
+		// Delay setting isSpeaking to false to capture final chunks
+		setTimeout(() => {
+			isSpeaking.current = false;
+			
+			// Process final speech chunks after ensuring all data is captured
+			if (speechChunks.current.length > 0 && streaming) {
+				(async () => {
+					try {
+						const blob = await mergeWavChunks(speechChunks.current);
+						const file = new File([blob], "speech.wav", {
+							type: "audio/wav",
+						});
+						const text = await onWhispered(file);
+						console.log("Final utterance transcription", {
+							text,
+							chunksProcessed: speechChunks.current.length,
+						});
+						if (text?.trim()) {
+							// Update base with final complete transcription
+							currentUtteranceBase.current = currentUtteranceBase.current
+								? `${currentUtteranceBase.current} ${text}`
+								: text;
+
+							setTranscript((prev) => ({
+								...prev,
+								text: currentUtteranceBase.current,
+							}));
+						}
+						// Clear speech chunks after processing
+						speechChunks.current = [];
+					} catch (err) {
+						console.error("Error processing speech chunks:", err);
+					}
+				})();
 			}
-		}
-		
+		}, 500); // Single delay to capture all final chunks
+
 		if (nonStop) {
 			onStartTimeout("stop");
 		}
@@ -507,10 +511,13 @@ export const useWhisper: UseWhisperHook = (config) => {
 				if (recordState === "recording" || recordState === "paused") {
 					await recorder.current.stopRecording();
 				}
-				
+
 				// Process any remaining speech chunks before final transcription
 				if (streaming && speechChunks.current.length > 0) {
-					console.log("Processing remaining speech chunks on stop:", speechChunks.current.length);
+					console.log(
+						"Processing remaining speech chunks on stop:",
+						speechChunks.current.length,
+					);
 					try {
 						const blob = await mergeWavChunks(speechChunks.current);
 						const file = new File([blob], "speech.wav", {
@@ -518,21 +525,22 @@ export const useWhisper: UseWhisperHook = (config) => {
 						});
 						const text = await onWhispered(file);
 						console.log("Final speech chunk transcription on stop", { text });
-						if (text && text.trim()) {
+						if (text?.trim()) {
 							// Use the base or current transcript text as foundation
-							const baseText = currentUtteranceBase.current || transcript.text || "";
+							const baseText =
+								currentUtteranceBase.current || transcript.text || "";
 							const finalTranscript = baseText ? `${baseText} ${text}` : text;
-							
+
 							setTranscript((prev) => ({
 								...prev,
-								text: finalTranscript
+								text: finalTranscript,
 							}));
 						}
 					} catch (err) {
 						console.error("Error processing final speech chunks:", err);
 					}
 				}
-				
+
 				onStopStreaming();
 				onStopTimeout("stop");
 				setRecording(false);
@@ -672,30 +680,34 @@ export const useWhisper: UseWhisperHook = (config) => {
 	 * - set transcript text with interim result
 	 */
 	const onDataAvailable = async (data: Blob) => {
-		console.log("onDataAvailable", { 
-			dataSize: data.size, 
+		console.log("onDataAvailable", {
+			dataSize: data.size,
 			isSpeaking: isSpeaking.current,
-			speechChunksLength: speechChunks.current.length 
+			speechChunksLength: speechChunks.current.length,
 		});
-		
+
 		try {
 			if (streaming && recorder.current) {
 				onDataAvailableCallback?.(data);
-				
+
 				// Always keep all chunks for final processing
 				chunks.current.push(data);
-				
-				// Only collect chunks for transcription when speaking
+
+				// Collect chunks for transcription when speaking or shortly after (to capture final words)
 				if (isSpeaking.current) {
 					console.log("Speech detected, adding chunk to speechChunks");
 					speechChunks.current.push(data);
-					
+
 					// Live transcription during speech for user feedback
 					const now = Date.now();
-					const timeSinceLastInterim = now - lastInterimTranscriptionTime.current;
-					
+					const timeSinceLastInterim =
+						now - lastInterimTranscriptionTime.current;
+
 					// Transcribe every 1 second or if we have 2+ chunks
-					if ((timeSinceLastInterim > 1000 || speechChunks.current.length >= 2) && speechChunks.current.length > 0) {
+					if (
+						(timeSinceLastInterim > 1000 || speechChunks.current.length >= 2) &&
+						speechChunks.current.length > 0
+					) {
 						const recorderState = await recorder.current.getState();
 						if (recorderState === "recording") {
 							try {
@@ -704,16 +716,19 @@ export const useWhisper: UseWhisperHook = (config) => {
 									type: "audio/wav",
 								});
 								const text = await onWhispered(file);
-								console.log("Live transcription", { 
+								console.log("Live transcription", {
 									text,
-									chunksProcessed: speechChunks.current.length 
+									chunksProcessed: speechChunks.current.length,
 								});
-								if (text && text.trim()) {
-									// Show live transcription (will be replaced by final at speech end)
+								if (text?.trim()) {
+									// Show live transcription preview (interim results)
+									const interimTranscript = currentUtteranceBase.current
+										? `${currentUtteranceBase.current} ${text}...`
+										: `${text}...`;
+									
 									setTranscript((prev) => ({
 										...prev,
-										text: currentUtteranceBase.current ? 
-											`${currentUtteranceBase.current} ${text}` : text
+										text: interimTranscript,
 									}));
 								}
 								lastInterimTranscriptionTime.current = now;
@@ -743,7 +758,7 @@ export const useWhisper: UseWhisperHook = (config) => {
 		async (file: File) => {
 			const response = await openai.audio.transcriptions.create({
 				file: file,
-				model: "whisper-1",
+				model: "gpt-4o-transcribe",
 				response_format: whisperConfig?.response_format,
 				temperature: whisperConfig?.temperature,
 				prompt: whisperConfig?.prompt,

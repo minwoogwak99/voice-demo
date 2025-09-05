@@ -24,9 +24,11 @@ const ModelHandler = () => {
 				Transcripting: {transcribing ? "transcribing" : "not transcribging"}
 			</p>
 			<p>Transcribed Text: {transcript.text}</p>
-			<Button onClick={() => startRecording()}>Start</Button>
-			<Button onClick={() => pauseRecording()}>Pause</Button>
-			<Button onClick={() => stopRecording()}>Stop</Button>
+			<div className="flex gap-1.5">
+				<Button onClick={() => startRecording()}>Start</Button>
+				<Button onClick={() => pauseRecording()}>Pause</Button>
+				<Button onClick={() => stopRecording()}>Stop</Button>
+			</div>
 		</div>
 	);
 };
